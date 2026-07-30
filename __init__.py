@@ -7,24 +7,22 @@ Suno.cn 音乐生成插件
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-from pathlib import Path
-from urllib.parse import urlparse
 import threading
 import time
 import webbrowser
-
-from plugin.sdk.plugin import (
-    NekoPluginBase,
-    neko_plugin,
-    plugin_entry,
-    lifecycle,
-    Ok,
-    Err,
-    SdkError,
-)
+from typing import Any
+from urllib.parse import urlparse
 
 import httpx
+from plugin.sdk.plugin import (
+    Err,
+    NekoPluginBase,
+    Ok,
+    SdkError,
+    lifecycle,
+    neko_plugin,
+    plugin_entry,
+)
 
 
 @neko_plugin
@@ -43,20 +41,20 @@ class SunoCnMusicPlugin(NekoPluginBase):
             return default
         try:
             return self.store._read_value(key, default)
-        except Exception as exc:
-            self.logger.warning("Store get failed for key {!r}: {}", key, exc)
+        except Exception as exc:  # noqa: BLE001 - store backend failures should fall back to defaults.
+            self.logger.warning(f"Store get failed for key {key!r}: {exc}")
             return default
 
     def _store_set_sync(self, key: str, value: Any) -> None:
         if not self.store.enabled:
-            self.logger.warning("Store is disabled, cannot persist key {!r}", key)
+            self.logger.warning(f"Store is disabled, cannot persist key {key!r}")
             return
         try:
             self.store._write_value(key, value)
-        except Exception as exc:
-            self.logger.warning("Store set failed for key {!r}: {}", key, exc)
+        except Exception as exc:  # noqa: BLE001 - cache writes must not break plugin actions.
+            self.logger.warning(f"Store set failed for key {key!r}: {exc}")
 
-    def _get_latest_audio_cache(self, lanlan_name: Optional[str] = None) -> dict[str, Any] | None:
+    def _get_latest_audio_cache(self, lanlan_name: str | None = None) -> dict[str, Any] | None:
         cache_key = f"latest_audio:{lanlan_name or '__global__'}"
         cached = self._store_get_sync(cache_key)
         return cached if isinstance(cached, dict) else None
@@ -76,7 +74,7 @@ class SunoCnMusicPlugin(NekoPluginBase):
             "duration": int(item.get("duration", 0) or 0),
         }
 
-    def _find_cached_audio_item(self, url: str, lanlan_name: Optional[str] = None) -> dict[str, Any] | None:
+    def _find_cached_audio_item(self, url: str, lanlan_name: str | None = None) -> dict[str, Any] | None:
         normalized_url = str(url).strip()
         if not normalized_url:
             return None
@@ -135,10 +133,7 @@ class SunoCnMusicPlugin(NekoPluginBase):
                 self.store.enabled = True
                 self.logger.info("Store force-enabled for audio cache")
 
-        self.logger.info(
-            "SunoCnMusic started: base_url={}, timeout={}s, store={}",
-            self._base_url, self._timeout, self.store.enabled
-        )
+        self.logger.info(f"SunoCnMusic started: base_url={self._base_url}, timeout={self._timeout}s, store={self.store.enabled}")
         return Ok({"status": "running", "base_url": self._base_url})
 
     @lifecycle(id="shutdown")
@@ -151,9 +146,9 @@ class SunoCnMusicPlugin(NekoPluginBase):
         self,
         method: str,
         endpoint: str,
-        json_data: Optional[Dict[str, Any]] = None,
-        params: Optional[Dict[str, Any]] = None,
-    ) -> tuple[bool, Dict[str, Any] | str]:
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> tuple[bool, dict[str, Any] | str]:
         """
         发送 HTTP 请求到 Suno.cn API
 
@@ -166,10 +161,7 @@ class SunoCnMusicPlugin(NekoPluginBase):
             "Content-Type": "application/json",
         }
 
-        self.logger.info(
-            "API Request: {} {} params={} json={}",
-            method, endpoint, params, json_data
-        )
+        self.logger.info(f"API Request: {method} {endpoint} params={params} json={json_data}")
 
         try:
             async with httpx.AsyncClient(
@@ -184,7 +176,7 @@ class SunoCnMusicPlugin(NekoPluginBase):
                 else:
                     return False, f"不支持的 HTTP 方法: {method}"
 
-                self.logger.info("API Response: status={} url={}", resp.status_code, url)
+                self.logger.info(f"API Response: status={resp.status_code} url={url}")
 
                 # Handle HTTP errors
                 if resp.status_code in (401, 403):
@@ -198,24 +190,24 @@ class SunoCnMusicPlugin(NekoPluginBase):
                 # Parse JSON response
                 try:
                     data = resp.json()
-                    self.logger.info("API Response data: {}", data)
+                    self.logger.info(f"API Response data: {data}")
                     return True, data
-                except Exception as e:
-                    self.logger.warning("Failed to parse JSON response: {}", e)
-                    return False, f"响应解析失败: {str(e)}"
+                except Exception as e:  # noqa: BLE001 - invalid upstream JSON is returned as a user-facing error.
+                    self.logger.warning(f"Failed to parse JSON response: {e}")
+                    return False, f"响应解析失败: {e!s}"
 
         except httpx.TimeoutException:
-            self.logger.warning("API request timeout: {}", url)
+            self.logger.warning(f"API request timeout: {url}")
             return False, "请求超时，请稍后重试"
         except Exception as e:
-            self.logger.exception("API request failed: {}", url)
-            return False, f"网络错误: {str(e)}"
+            self.logger.exception(f"API request failed: {url}")
+            return False, f"网络错误: {e!s}"
 
-    def _poll_and_notify(self, serial_nos: List[str], lanlan_name: Optional[str] = None) -> None:
+    def _poll_and_notify(self, serial_nos: list[str], lanlan_name: str | None = None) -> None:
         """后台轮询任务状态，完成后主动通知用户"""
         try:
             serial_joined = ",".join(map(str, serial_nos))
-            self.logger.info("Starting background polling for: {}", serial_joined)
+            self.logger.info(f"Starting background polling for: {serial_joined}")
 
             # 最多轮询 6 次，每次间隔 10 秒，总共约 60 秒
             for attempt in range(6):
@@ -233,7 +225,7 @@ class SunoCnMusicPlugin(NekoPluginBase):
                         self.logger.warning("Background polling auth failed")
                         return
                     if resp.status_code != 200:
-                        self.logger.warning("Background polling HTTP {}", resp.status_code)
+                        self.logger.warning(f"Background polling HTTP {resp.status_code}")
                         continue
 
                     data = resp.json()
@@ -243,7 +235,7 @@ class SunoCnMusicPlugin(NekoPluginBase):
 
                     pending = [t for t in tasks if t.get("status") in ("queued", "processing")]
                     if pending:
-                        self.logger.info("Background polling attempt {}: still pending", attempt + 1)
+                        self.logger.info(f"Background polling attempt {attempt + 1}: still pending")
                         continue
 
                     success_tasks = [t for t in tasks if t.get("status") == "success"]
@@ -304,14 +296,14 @@ class SunoCnMusicPlugin(NekoPluginBase):
                         self.logger.info("Background polling completed with failure")
                         return
 
-                except Exception as e:
-                    self.logger.warning("Background polling attempt {} failed: {}", attempt + 1, e)
+                except Exception as e:  # noqa: BLE001 - polling retries should continue after transient failures.
+                    self.logger.warning(f"Background polling attempt {attempt + 1} failed: {e}")
                     continue
 
             self.logger.warning("Background polling finished without terminal result")
 
-        except Exception as e:
-            self.logger.exception("Background polling crashed: {}", e)
+        except Exception:
+            self.logger.exception("Background polling crashed")
 
     @plugin_entry(
         id="get_user_info",
@@ -374,7 +366,7 @@ class SunoCnMusicPlugin(NekoPluginBase):
             return Err(SdkError(str(result)))
 
         tasks = result.get("tasks", []) if isinstance(result, dict) else []
-        summary_parts: List[str] = []
+        summary_parts: list[str] = []
         for task in tasks:
             status = task.get("status", "")
             title = task.get("title", "")
@@ -463,7 +455,7 @@ class SunoCnMusicPlugin(NekoPluginBase):
         if not mv:
             mv = "v5"
         if mv not in allowed_mv:
-            self.logger.warning("Invalid mv '{}' , fallback to v5", mv)
+            self.logger.warning(f"Invalid mv {mv!r}, fallback to v5")
             mv = "v5"
 
         normalized_title = str(title).strip()
@@ -480,7 +472,7 @@ class SunoCnMusicPlugin(NekoPluginBase):
         if original_custom_mode and not custom_mode:
             self.logger.warning("custom_mode disabled because prompt does not look like lyrics")
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "prompt": prompt,
             "mv": mv,
             "custom_mode": custom_mode,
@@ -525,7 +517,7 @@ class SunoCnMusicPlugin(NekoPluginBase):
             name=f"suno-poll-{serial_nos[0] if serial_nos else 'unknown'}",
         ).start()
 
-        self.logger.info("Background polling thread started for: {}", serial_nos)
+        self.logger.info(f"Background polling thread started for: {serial_nos}")
 
         return Ok({
             "serial_nos": serial_nos,
@@ -695,7 +687,7 @@ class SunoCnMusicPlugin(NekoPluginBase):
         if not inspiration:
             return Err(SdkError("灵感描述不能为空"))
 
-        payload: Dict[str, Any] = {"inspiration": inspiration}
+        payload: dict[str, Any] = {"inspiration": inspiration}
         if title:
             payload["title"] = title
         if style:
@@ -716,21 +708,21 @@ class SunoCnMusicPlugin(NekoPluginBase):
         })
 
     def _open_url(self, url: str, title: str = ""):
-        if not (url.startswith("http://") or url.startswith("https://")):
+        if not url.startswith(("http://", "https://")):
             return Err(SdkError("仅支持 http/https URL"))
 
         title = str(title).strip()
         title_display = f"（{title}）" if title else ""
-        self.logger.info("Opening URL{}: {}", title_display, url)
+        self.logger.info(f"Opening URL{title_display}: {url}")
 
         try:
             opened = webbrowser.open(url)
         except Exception as e:
-            self.logger.exception("Failed to open URL: {}", url)
-            return Err(SdkError(f"无法打开 URL: {str(e)}"))
+            self.logger.exception(f"Failed to open URL: {url}")
+            return Err(SdkError(f"无法打开 URL: {e!s}"))
 
         if not opened:
-            self.logger.warning("webbrowser.open returned false for url={}", url)
+            self.logger.warning(f"webbrowser.open returned false for url={url}")
             return Err(SdkError("系统未能打开默认浏览器，请检查系统浏览器设置"))
 
         return Ok({
@@ -787,13 +779,13 @@ class SunoCnMusicPlugin(NekoPluginBase):
             if not title:
                 title = track["title"]
 
-            self.logger.info("Using cached audio: {}", track)
+            self.logger.info(f"Using cached audio: {track}")
         else:
             track = self._find_cached_audio_item(url, lanlan_name)
             if track and not title:
                 title = track["title"]
 
-        if not (url.startswith("http://") or url.startswith("https://")):
+        if not url.startswith(("http://", "https://")):
             return Err(SdkError("仅支持 http/https URL"))
 
         if track:
@@ -801,8 +793,8 @@ class SunoCnMusicPlugin(NekoPluginBase):
             try:
                 self._push_native_music_play(track)
             except Exception as e:
-                self.logger.exception("Failed to dispatch music to native player: {}", url)
-                return Err(SdkError(f"无法推送到 N.E.K.O 播放器: {str(e)}"))
+                self.logger.exception(f"Failed to dispatch music to native player: {url}")
+                return Err(SdkError(f"无法推送到 N.E.K.O 播放器: {e!s}"))
 
             return Ok({
                 "status": "queued",
@@ -917,4 +909,4 @@ class SunoCnMusicPlugin(NekoPluginBase):
 
         except Exception as e:
             self.logger.exception("Failed to update API Key")
-            return Err(SdkError(f"更新 API Key 失败: {str(e)}"))
+            return Err(SdkError(f"更新 API Key 失败: {e!s}"))
