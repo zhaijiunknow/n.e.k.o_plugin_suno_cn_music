@@ -100,12 +100,18 @@ class SunoCnMusicPlugin(NekoPluginBase):
         self.register_music_domains([host_or_url])
         self.ctx.push_message(
             source=self.plugin_id,
-            message_type="music_play_url",
-            metadata={
-                "url": url,
-                "name": str(track.get("title", "未命名歌曲")).strip() or "未命名歌曲",
-                "artist": str(track.get("artist", "Suno")).strip() or "Suno",
-            },
+            visibility=["chat"],
+            ai_behavior="blind",
+            parts=[
+                {
+                    "type": "ui_action",
+                    "action": "media_play_url",
+                    "media_type": "audio",
+                    "url": url,
+                    "name": str(track.get("title", "未命名歌曲")).strip() or "未命名歌曲",
+                    "artist": str(track.get("artist", "Suno")).strip() or "Suno",
+                }
+            ],
         )
 
     @lifecycle(id="startup")
@@ -266,11 +272,15 @@ class SunoCnMusicPlugin(NekoPluginBase):
 
                         self.ctx.push_message(
                             source="suno_cn_music",
-                            message_type="proactive_notification",
-                            description="音乐生成完成",
                             priority=8,
-                            content="音乐生成完成：\n" + "\n".join(lines),
+                            parts=[
+                                {
+                                    "type": "text",
+                                    "text": "音乐生成完成：\n" + "\n".join(lines),
+                                }
+                            ],
                             metadata={
+                                "description": "音乐生成完成",
                                 "serial_nos": serial_nos,
                                 "tasks": success_tasks,
                             },
@@ -283,11 +293,15 @@ class SunoCnMusicPlugin(NekoPluginBase):
                         reasons = [f"{t.get('serial_no', '')}: {t.get('fail_reason', '未知错误')}" for t in failed_tasks]
                         self.ctx.push_message(
                             source="suno_cn_music",
-                            message_type="proactive_notification",
-                            description="音乐生成失败",
                             priority=8,
-                            content="音乐生成失败：\n" + "\n".join(reasons),
+                            parts=[
+                                {
+                                    "type": "text",
+                                    "text": "音乐生成失败：\n" + "\n".join(reasons),
+                                }
+                            ],
                             metadata={
+                                "description": "音乐生成失败",
                                 "serial_nos": serial_nos,
                                 "tasks": failed_tasks,
                             },

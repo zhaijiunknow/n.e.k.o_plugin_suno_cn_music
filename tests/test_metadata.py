@@ -10,7 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_plugin_id_matches_repository_suffix() -> None:
     plugin = tomllib.loads((ROOT / "plugin.toml").read_text(encoding="utf-8"))["plugin"]
     assert plugin["id"] == "suno_cn_music"
-    assert ROOT.name == f"n.e.k.o_plugin_{plugin['id']}"
+    # The repository directory is named n.e.k.o_plugin_<id>, but when the
+    # plugin is mounted inside the N.E.K.O tree for market verification it is
+    # named after the plugin id alone. Accept both forms.
+    assert ROOT.name in {plugin["id"], f"n.e.k.o_plugin_{plugin['id']}"}
 
 
 def test_default_api_key_is_not_committed() -> None:
